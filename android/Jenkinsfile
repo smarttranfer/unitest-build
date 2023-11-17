@@ -1,0 +1,147 @@
+pipeline {
+    agent any
+    
+    options {
+        ansiColor('xterm')
+    }
+    
+    environment {
+        KEYSTORE_PASSWORD = credentials('keystore_password')
+        KEY_STORE_LOCATION = credentials('key_store_location')
+        JSON_KEY_FILE = credentials('json_key_file')
+        APPLEID_APP_PASSWORD = credentials('appleid_app_password')
+        GITLAB_API_KEY = credentials('gitlab_api_key')
+        SCM_BRANCH = 'dev_1.0_new'
+    }   
+    stages {
+        stage('Fetch repo') {
+            steps {
+                git branch: 'dev_1.0_new', url: 'https://Thanhphan1147:$GITLAB_API_KEY@gitlab.com/anhdv282/one_farm.git'            
+                sh('pwd')
+                script {
+                    currentBuild.description = "branch: $SCM_BRANCH"
+                    currentBuild.displayName = "ONE Farm CI: Pending..."
+                }
+            }
+        }
+        stage('Bump build number') {
+            steps {
+                sh '''cd one_farm/ios
+                bundle update
+                bundle update fastlane
+                bundle exec fastlane ios increment_flutter_version_code is_ci:true json_key:$JSON_KEY_FILE track:internal
+                bundle exec fastlane write_label
+                '''
+                script {
+                    def label = readFile(file: 'one_farm/buildlabel.txt')
+                    println(label)
+                    currentBuild.displayName = label
+                    currentBuild.description = "branch: $SCM_BRANCH"
+                }
+            }
+        }
+        stage('Build') {
+            parallel {
+                stage('Build and deploy iOS') {
+                    stages {
+                        stage('Pre build iOS') {
+                            steps {
+                                sh '''cd one_farm/ios
+                                bundle exec fastlane ios pre_build is_ci:true'''   
+                            }
+                        }
+                        stage('Flutter build iOS') {
+                            steps {
+                                sh'''cd one_farm/ios
+                                flutter build ios --release --no-codesign'''
+                            }
+                        }
+                        stage('Build and deploy to test flight') {
+                            steps {
+                                sh '''cd one_farm/ios
+                                # bundle exec fastlane beta is_ci:true
+                                '''
+                            }    
+                        }
+                    }
+                }
+                
+                stage('Build and deploy Android') {
+                    stages {
+                        stage('set up') {
+                            steps {
+                                sh'''cd one_farm/android
+                                bundle --version
+                                # bundle update'''
+                            }
+                        }
+                        stage('Write keystore config') {
+                            steps {
+                                sh '''cd one_farm/android
+                                echo "storePassword=$KEYSTORE_PASSWORD" > key.properties
+                                echo "keyPassword=$KEYSTORE_PASSWORD"  >> key.properties
+                                echo "keyAlias=upload" >> key.properties
+                                echo "storeFile=$KEY_STORE_LOCATION" >> key.properties
+                                cat key.properties'''
+                            }
+                        }
+                        stage('Flutter build aab') {
+                            steps {
+                                sh '''pwd
+                                cd one_farm/android
+                                bundle exec fastlane build_aab is_ci:true'''
+                            }
+                        }
+                        stage('Flutter build apk') {
+                            steps {
+                                sh '''pwd
+                                cd one_farm/android
+                                bundle exec fastlane build_apk is_ci:true'''
+                            }
+                        }
+                        stage('Upload google play') {
+                            steps {
+                                sh '''pwd
+                                cd one_farm/android
+                                bundle exec fastlane upload is_ci:true type:apk'''
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Build OTA for in-house distribution') {
+            stages {
+                stage('Pre build iOS') {
+                    steps {
+                        sh '''cd one_farm/ios
+                        flutter build ios --release --no-codesign'''   
+                    }
+                }
+                stage('Build OTA') {
+                    steps {
+                        sh '''cd one_farm/ios
+                        bundle exec fastlane build_ota is_ci:true'''   
+                    }
+                }
+            }
+            
+        }
+        
+        stage('Wrapping up') {
+            steps {
+                sh '''
+                git add one_farm/pubspec.yaml
+                git commit -m "[skip-ci] [fastlane] update build number"
+                git reflog
+                git remote
+                git branch
+                git pull origin $SCM_BRANCH
+                git status --porcelain
+                # git push origin $SCM_BRANCH
+                '''
+            }
+        }
+    }
+}
