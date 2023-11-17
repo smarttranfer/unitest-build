@@ -10,7 +10,7 @@ args = parser.parse_args()
 
 url = f"{args.url_api}"
 payload = {'id': f'{args.url}'}
-files=[('file',('Facebook.apk',open(f"{args.file}",'rb'),'application/octet-stream'))]
+files=[('file',(f'{args.file}',open(f"{args.file}",'rb'),'application/octet-stream'))]
 headers = {}
 response = requests.request("POST", url, headers=headers, data=payload, files=files)
 print(response.text)
